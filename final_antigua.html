@@ -1,0 +1,821 @@
+<!--
+Autor: Álvaro Gutiérrez
+Partes implementadas:
+- Funcionalidad básica
+- Funcionalidad avanzada:
+   - Ángulo de rebote variable
+   - Velocidad de desplazamiento vertical variable
+   - Diferente puntuacion para los ladrillos
+- Mejoras:
+
+   - Niveles de dificultad:3  (Aumentan el numero de bloques y la velocidad de la bola y disminuye el tamaño del user)
+
+   - La barra esta animada con suavidad (no hay saltos bruscos) y responde adecuadamente a las teclas -> Mejora de la jugabilidad
+      (El comportamiento normal al pusar una tecla seria:  a--aaaaaaaa ,haciendo imposible jugar manteniendo pulsado .Esto queda solucionado)
+
+   - Marcador con gráfico 3D (con animaciones esteticas)
+
+   - La fisica avanzada del golpeo del user (verticalidad + cambio de angulo) aplica tambien a los ladillos -> Da mas jugabilidas
+
+   - Rotacion de la pelota
+
+   - Diferentes colores(texuras distintas) para los ladrillos segun su puntuacion.
+
+   - Efectos de sonido: Ladrillo, bordes, sonido de victoria, sonido de derrota, subir de nivel, perder vida
+-->
+<!DOCTYPE html>
+<html>
+
+<head>
+<title>Three.js: Collision detection</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/103/three.min.js"></script> 
+
+<script>
+   var first_dir = [1,2];
+   var stepX;
+   var stepY;
+   var desp_bar = 0;
+   var desp_bar_count = 0;
+   var sceneWidth = window.innerWidth -40;
+   var sceneHeight = window.innerHeight - 20;
+   var key_up_left = true;
+   var key_up_right = true;
+   var vel = 0.2;
+   var y_last_change = 0;
+   var text_animation = 0.008;
+   var game_width;
+   var game_height;
+   var bricks_puntuation = [];
+   var USER;
+   var user_vel = 0.2;
+   var BORDERS;
+   var BRICKS;
+   var LEVEL = 1;
+   var brick_sound;
+   var border_sound;
+   //Variables del juego
+   var GAME_STATE = -1;
+   var FIRST_STATE = 8;
+   var STOP_GAME = true;
+   var LIFE_NUMBER = 3;
+   var life_loss = false;
+   var POINTS_COUNT = 0;
+   var bonus_counter = 3;
+   var bonus = 1;
+   var jugada_points = 0;
+   var USER_WIDTH = 20;
+
+   function init() {
+      //Basic scene configuration & loadables
+      var scene = new THREE.Scene();
+      var loader = new THREE.TextureLoader();
+      loader.load("./fondo.jpeg" , function(texture){
+         texture.minFilter = THREE.LinearFilter;
+         scene.background = texture
+      })
+      sceneWidth = window.innerWidth -40;
+      sceneHeight = window.innerHeight - 20;
+      var camera = new THREE.PerspectiveCamera(90, sceneWidth / sceneHeight, 0.01, 100);
+      camera.position.set(0, -20, 30);
+      camera.lookAt(scene.position);
+      var renderer = new THREE.WebGLRenderer({
+         antialias : true
+      });
+      renderer.shadowMap.enabled = true;
+      renderer.setSize(sceneWidth, sceneHeight);
+      document.body.appendChild(renderer.domElement);
+      brick_sound = new Audio('brick_sound.mp3');
+      border_sound = new Audio('border_sound.mp3');
+      //Not-dinamic text
+      var points_text = getText("Points" ,scene, [-61 ,20,2] ,4 );
+      var lives_text = getText("Lives" ,scene, [41 ,20,2] ,4 );
+      var level_text = getText("Level" ,scene, [-48,-5,2] ,1.5 );
+      var combo_text = getText("Combo" ,scene, [-52,5,2] ,2 );
+      var Tittle_text = getText("Super breackout wars" ,scene, [-57 ,45,2] ,6 );
+      deletePointsText(scene,"level_text"); //NO es necesario pero por si acaso, limpia la puntuacion.
+      addPointsText(scene,String(POINTS_COUNT),-51,12,2,"points_text"); // Inicializa la puntuacion
+      //Light,sphere & Not-Dinamic objects
+      light = getLight(scene);
+      game_width = 80;
+      game_height = 60;
+      var leftBorder = getBorder("left",   2, game_height +10, 2, -game_width/2 -1,   6,  0 ,0);
+      var rightBorder = getBorder("right", 2, game_height +10, 2,  game_width/2 +1,  6,  0 ,0);
+      var topBorder = getBorder("top",     game_width + 4, 2, 2,  0,  40+1,  0 ,0);
+      var sphere = getSphere();
+      var floor = getFloor();
+      scene.add(leftBorder);
+      scene.add(rightBorder);
+      scene.add(topBorder);
+      scene.add(sphere);
+      scene.add(floor);
+      //Colision agrupations
+      BORDERS = [ leftBorder, rightBorder, topBorder ];
+      var bricks = level_start(scene,[], 4,7,vel,20); //Iniciates level 1 
+      y_last_change = sphere.position.y; // adds a fist dafault value necesary to calculate physics
+      animate(sphere, BORDERS, renderer, scene, camera, USER , bricks ); //animate function = game loop;
+   }
+
+   function animate(sphere, borders, renderer, scene, camera ,bar , bricks) {
+
+      bricks = Game_mechanics(scene ,sphere, bricks);
+      bricks = checkCollision(sphere ,bricks , scene);
+      
+      sphere.position.x += stepX;
+      sphere.position.y += stepY;
+
+      sphere.rotation.y += -stepX ;
+      sphere.rotation.x += -stepY;
+
+      for (var i = 0; i < LIFE_NUMBER; i++){
+         scene.getObjectByName( "lives_"+String(i) ).rotation.y +=0.01;
+      }
+
+      if (STOP_GAME){
+         
+         try {
+            scene.getObjectByName( "menu_text").material.transparent = true;
+            if (scene.getObjectByName( "menu_text").material.opacity >= 1){
+               text_animation *= -1
+            }else if(scene.getObjectByName( "menu_text").material.opacity <= 0){
+               text_animation*= -1
+            }
+            scene.getObjectByName( "menu_text").material.opacity += text_animation;
+            
+         } catch (error) {}
+      }
+
+      
+      
+      //CONTROL DE LA BARRA --------------------------------------------------
+      document.onkeydown = function (ev) {
+
+            switch (ev.keyCode) {
+                  case 37: // Left
+                     if (key_up_left == true){
+                        key_up_left = false;
+                        key_up_right = true;
+                        desp_bar =  -1 ;                    
+                     }
+                     break;
+                  case 39: // Right
+                     if (key_up_right == true){
+                        key_up_left = true;
+                        key_up_right = false;
+                        desp_bar =  1 ;   
+                     }
+                     break;
+                  
+                  default:
+                     if (STOP_GAME){
+                        if (GAME_STATE == 0 || GAME_STATE == 2){
+                           GAME_STATE = 1;
+                        }else if(GAME_STATE == 4 || GAME_STATE == 3 ){
+                           GAME_STATE = -1;
+                           
+                        }
+                     }
+                  break;
+            }     
+         
+      }
+
+      document.onkeyup = function (ev) { 
+            switch (ev.keyCode) {
+
+                  case 37: // Left
+                     key_up_left = true;
+                     if (key_up_right == false){
+                        desp_bar =  1 ;            
+                     }
+                     break;
+                  case 39: // Right
+                     key_up_right = true;
+                     if (key_up_left == true){
+                        desp_bar =  -1 ;           
+                     }
+                     break;               
+            }
+            if(key_up_left == true && key_up_right == true){
+                  key_up_left = true;
+                  key_up_right = true;
+                  desp_bar =0;
+            }
+      };
+
+
+      if (0 < desp_bar && bar.position.x <= 40 - USER_WIDTH/2) {
+            bar.position.x += user_vel; 
+            
+      } else if (0 > desp_bar  && bar.position.x >= -40  + USER_WIDTH/2){
+            bar.position.x += -user_vel; 
+           
+      }
+      //-----------------------------------------------------------------------
+      renderer.render(scene, camera);
+      requestAnimationFrame(function() {
+         animate(sphere, BORDERS, renderer, scene, camera , USER , bricks);
+      });
+   }
+
+   function getLight(scene) {
+
+      var light = new THREE.AmbientLight(0xffffff ,1.2); // soft white light
+      scene.add( light );
+
+      var light = new THREE.PointLight(0xffffff ,1);
+      light.position.set(0, -30, 3);
+      light.castShadow = true;
+      //light.shadow.camera.near = 0;
+      //light.shadow.camera.far = 5;
+      light.shadow.camera.left = -1;
+      light.shadow.camera.right = 1;
+      light.shadow.camera.top = 1;
+      light.shadow.camera.bottom = -1;
+
+      scene.add( light );
+      
+      
+
+      //light.shadow.mapSize.width = 5000;
+      //light.shadow.mapSize.height = 5000;
+      scene.add( light );
+      
+
+      
+   }
+
+   function getSphere() {
+      var geometry = new THREE.SphereGeometry(1, 20, 20);
+      var material = getDeathStarMaterial();
+      var mesh = new THREE.Mesh(geometry, material);
+      mesh.position.z = 1;
+      mesh.position.x = 0;
+      mesh.castShadow = true;
+      mesh.name = "sphere";
+      return mesh;
+   }
+
+
+   function getlives(number) {
+      lives = [];
+      for (var i = 0; i < 3; i++){
+         lives[i] = getlive();
+         lives[i].name = "lives_"+ String(i);
+         lives[i].position.set(45, i*10-8, 3);
+      }
+
+      return lives
+   }
+
+   function getlive() {
+      var geometry = new THREE.SphereGeometry( 3, 20,20 );
+      //var material = new THREE.MeshNormalMaterial();
+      var material = getDeathStarMaterial(); 
+      var mesh = new THREE.Mesh(geometry, material);
+      mesh.rotation.y = 1.8;
+      //sphere.rotation.y
+      
+      mesh.castShadow = true;
+      return mesh;
+   }
+
+   function getFloor() {
+      var geometry = new THREE.PlaneGeometry(80, 70);
+      var mesh = new THREE.Mesh(geometry, getShipMaterial());
+      mesh.position.y = 5;
+      mesh.receiveShadow = true;
+      return mesh;
+   }
+
+   function addMenuText(scene,text) {
+
+      var geometry = new THREE.PlaneGeometry(200, 7);
+      var material = new THREE.MeshToonMaterial()
+      material.color = new THREE.Color(0xffffff);
+      var plane_menu = new THREE.Mesh(geometry, material);
+      plane_menu.castShadow = false;
+      plane_menu.position.z = 15;
+      plane_menu.position.y = 35
+      plane_menu.rotation.x = 0.50;
+      plane_menu.name = "plane_text"
+      scene.add(plane_menu);
+
+      const loader = new THREE.FontLoader();
+      
+      var text_mesh = loader.load( 'fonts/Starwars.json', function ( font ) {
+
+         var geometry = new THREE.TextGeometry(text, {
+            font: font,
+            size: 3,
+            height: 0.2,
+            
+         } );
+
+      var material = new THREE.MeshToonMaterial()
+      material.color = new THREE.Color(0x000000);
+      material.opacity = 0.9;
+      var text_menu = new THREE.Mesh(geometry,material);
+      text_menu.castShadow = false;
+      text_menu.position.z = 16;
+      text_menu.position.y = 28;
+      text_menu.position.x = -45;
+
+      text_menu.rotation.x +=0.5; 
+      text_menu.name = "menu_text"
+      scene.add(text_menu);
+
+      })
+   }  
+
+   function deleteMenuText(scene){
+      scene.remove(scene.getObjectByName( "menu_text" )); 
+      scene.remove(scene.getObjectByName( "plane_text" ));
+      
+   }
+
+//----------------------
+   function addPointsText(scene,text ,x,y,z,size_letter,name) {
+
+      const loader = new THREE.FontLoader();
+      var text_mesh = loader.load( 'fonts/Starwars.json', function ( font ) {
+
+         var geometry = new THREE.TextGeometry(text, {
+            font: font,
+            size: size_letter,
+            height: 0.2,
+            
+         } );
+
+      var material = new THREE.MeshPhysicalMaterial()
+      material.color = new THREE.Color(0xffdf00);
+      var text_menu = new THREE.Mesh(geometry,material);
+      text_menu.castShadow = false;
+      text_menu.position.z = z;
+      text_menu.position.y = y;
+      text_menu.position.x = x;
+
+      text_menu.rotation.x +=0.5; 
+      text_menu.name = name;
+      scene.add(text_menu);
+      });
+   }
+
+
+   function deletePointsText(scene,name){
+      scene.remove(scene.getObjectByName(name)); 
+
+   }
+
+
+   function level_start(scene,bricks, f, c,vel_ball,size_bar){
+
+      var sphere = scene.getObjectByName("sphere")
+      sphere.position.x = 0;
+      sphere.position.y = -1;
+
+      for (var i = 0; i < bricks.length; i++) {
+         scene.remove(scene.getObjectByName(bricks[i].name));
+      }
+      var new_bricks = getbricks(f,c)
+      bricks =new_bricks ;
+
+      for (var i = 0; i < bricks.length; i++) {
+         scene.add(bricks[i]);
+      }
+
+      vel = vel_ball;
+
+      scene.remove(USER); 
+      USER = getBorder("down",   size_bar, 2, 2,  0, -20, 0 ,1);
+      BORDERS = BORDERS.slice(0,3)
+      scene.add(USER);
+      BORDERS.push(USER)
+
+      return bricks;
+      
+   }
+
+//---------
+   function getText(text , scene,position_text ,size_text) { //LA FUENTE DA PROBLEMAS
+      const loader = new THREE.FontLoader();
+      loader.load( 'fonts/Starwars.json', function ( font ) {
+
+         const geometry = new THREE.TextGeometry(text, {
+            font: font,
+            size: size_text,
+            height: 0.2,
+            
+         } );
+
+         var material = new THREE.MeshPhysicalMaterial()
+         material.color = new THREE.Color(0xffffff);
+
+         var mesh = new THREE.Mesh(geometry,material);
+         mesh.castShadow = false;
+         mesh.position.x = position_text[0];
+         mesh.position.y =position_text[1];
+         mesh.position.z = 2;
+         mesh.rotation.x +=0.5; 
+         mesh.receiveShadow = true;
+      
+         scene.add(mesh);
+                  
+      } );
+   }
+
+   function getBorder(name, x, y, z, posX, posY, posZ ,type) {
+      var geometry = new THREE.BoxGeometry(x, y, z);
+      var material ;
+      if (type == 0){
+         material = getSteelMaterial();
+      }else{
+         material = getLaserMaterial();
+      }
+      var mesh = new THREE.Mesh(geometry, material);
+      //mesh.receiveShadow = true;
+      mesh.castShadow = true;
+      mesh.position.set(posX, posY, posZ);
+      mesh.name = name;
+
+      return mesh;
+   }
+
+   function getBrick(name, x, y, z, posX, posY, posZ,puntuation) {
+      var geometry = new THREE.BoxGeometry(x, y, z);
+
+      switch(puntuation){
+         case 1:   
+            texture = new THREE.TextureLoader().load("quizas1.jpg")
+            break;
+         
+         case 2:
+            texture = new THREE.TextureLoader().load("quizas2.jpg")
+            break;
+         
+         case 3:
+            texture = new THREE.TextureLoader().load("quizas3.jpg")
+            break;
+         case 4:
+            texture = new THREE.TextureLoader().load("quizas4.jpg")
+            break;
+      }
+      texture.minFilter = THREE.LinearFilter;
+      var material = new THREE.MeshPhysicalMaterial({
+         map : texture
+
+      });
+      
+      material.side = THREE.DoubleSide;
+      
+      
+      var mesh = new THREE.Mesh(geometry, material);
+      mesh.receiveShadow = true;
+      mesh.castShadow = true;
+      mesh.position.set(posX, posY, posZ);
+      mesh.name = name;
+
+      
+      return mesh;
+   }
+
+   function getbricks(f,c) {
+      // filas, columnas ,separacion vertical, separacion horizontal
+      var bricks = [];
+      count = 0;
+      var space_x_proportion = 0.4;
+      var space_y_proportion = 1.5;
+      var real_game_height = 2*game_height/3;
+      //Calculo del tamaño de los ladrillos:
+      //Anchura
+      // Game_width = c_ladrillos * (Ancho ladrillos + (espaciadoLadirllo = 40%Ancholadrillo)) + espaciadoLadirllo --> Ancho ladrillos = Gamewidth / (c_ladrillos * (1,4 +0,4*c))
+      var brick_width = game_width / (((1+space_x_proportion) * c + space_x_proportion));
+      //Altura
+      // Game_height/2 = f_ladrillos * (largo ladrillos + (espaciadoLadirllo = 120%largoladrillo)) + espaciadoLadirllo --> largo ladrillos = (Gamewidth/2) / (f_ladrillos * (2,2 +1,2*c))
+      var brick_height = (real_game_height) / ((1+space_y_proportion) * f + space_y_proportion);
+
+      for (var i = 0; i < c; i++) {
+         for (var j = 0; j < f ; j++) {
+            var posx = i * ((1+space_x_proportion)*brick_width) - ((game_width- brick_width)/2) + space_x_proportion*brick_width ;
+            var posy =  game_height/2 - (j* ((1+space_y_proportion)*brick_height) - space_y_proportion*brick_height );
+            bricks_puntuation[count] = Math.floor( (f - j + 1)/2)  ;
+            bricks[count] = getBrick("brick_"+ String(count) , brick_width,brick_height ,2 , posx ,posy , 1 , bricks_puntuation[count] );
+            
+            count += 1;
+         }
+      }
+      return bricks
+   }
+
+
+   function dir2aceleration(vector_dir , vel) {
+      var aceleration = []
+      var new_vector = new THREE.Vector3(vector_dir[0]*1.2 ,  vector_dir[1] ,0);
+      new_vector =new_vector.normalize();
+      aceleration[0] = new_vector.x * vel ;
+      if (aceleration[0] <= 0){
+         aceleration[0] += -0.03 //Minimo
+      }else if (aceleration[0] >= 0){
+         aceleration[0] += 0.03 //Minimo
+      }
+      aceleration[1] = new_vector.y * vel;
+      if (aceleration[1] <= 0){
+         aceleration[1] += -0.03 //Minimo
+      }else if (aceleration[1] >= 0){
+         aceleration[1] += 0.03 //Minimo
+      }
+      return aceleration;
+   }
+
+ 
+   function getLaserMaterial() {
+      var texture = new THREE.TextureLoader().load("metalrojo.jpg");
+      texture.minFilter = THREE.LinearFilter;
+      var material = new THREE.MeshPhysicalMaterial({
+         map : texture
+      });
+      
+      material.side = THREE.DoubleSide;
+      return material;
+   }
+
+   function getShipMaterial() {
+      var texture = new THREE.TextureLoader().load("ship.jpg");
+      texture.minFilter = THREE.LinearFilter;
+      var material = new THREE.MeshPhysicalMaterial({
+         map : texture,
+      });
+      material.side = THREE.DoubleSide;
+      return material;
+   }
+
+   function getDeathStarMaterial() {
+      var texture = new THREE.TextureLoader().load("death.png");
+      texture.minFilter = THREE.LinearFilter;
+      var material = new THREE.MeshPhysicalMaterial({
+         map : texture,
+      });
+      material.side = THREE.DoubleSide;
+      return material;
+   }
+   
+
+   function getSteelMaterial() {
+   
+      var texture = new THREE.TextureLoader().load("metal_texture.jpg");
+      texture.minFilter = THREE.LinearFilter;
+      var material = new THREE.MeshPhysicalMaterial({
+         map : texture
+      });
+      material.map.wrapS = material.map.wrapT = THREE.RepeatWrapping;
+      material.map.repeat.set(1, 1);
+      material.side = THREE.DoubleSide;
+
+      return material;
+   }
+
+
+   function physics_collision(objt , sphere , LRP) {
+      //La x depende la posicion del eje x con el de la bola --> step x
+      // La y depende de la altura con la que cae --> LRP --> Last rebote position
+      aceleration = []
+      dif_pos_x = (objt.position.x - sphere.position.x);
+      console.log("LRD: " + LRP);
+      dif_pos_y = -1* (LRP - sphere.position.y);
+      console.log(dif_pos_y);
+  
+      var new_dir = dir2aceleration([-1*dif_pos_x , -1*dif_pos_y] ,vel);
+      return new_dir;
+   }
+
+   function Game_mechanics(scene ,sphere, bricks) {
+      switch (GAME_STATE) {
+
+         case -1: // Left
+            deleteMenuText(scene);
+            deletePointsText(scene,"level_text");
+            deletePointsText(scene,"combo_text");
+            deletePointsText(scene,"points_text");
+            USER_WIDTH = 20;
+            bricks = level_start(scene,bricks, 4,7,vel ,USER_WIDTH);
+            LEVEL = 1;
+            POINTS_COUNT = 0;
+            bonus = 1;
+            bonus_counter = 3;
+            vel = 0.2;
+            LIFE_NUMBER = 3
+            var lives = getlives(LIFE_NUMBER);
+            for (var i = 0; i < lives.length; i++) {
+               scene.add(lives[i]);
+            }
+            FIRST_STATE = GAME_STATE;
+            GAME_STATE = 0;
+
+         case 0: // Left
+
+            stepX = 0;
+            stepY = 0;
+            sphere.position.x = 0;
+            sphere.position.y = -15;
+            if (GAME_STATE != FIRST_STATE) {
+               FIRST_STATE = GAME_STATE;
+               addMenuText(scene,"Pulsa cualquier boton para iniciar");
+               deletePointsText(scene,"level_text");
+               addPointsText(scene,String(LEVEL),-44,-9,2,2.5,"level_text")
+               
+            }
+            break;
+         case 1: // Right
+            STOP_GAME = false;
+            life_loss = false;
+            var first_vector = dir2aceleration([1,2],vel);
+            sphere.position.x = 0;
+            sphere.position.y = -15;
+            stepX = first_vector[0];
+            stepY = first_vector[1];
+            
+
+            if (GAME_STATE != FIRST_STATE) {
+               
+               FIRST_STATE = GAME_STATE;
+               deleteMenuText(scene,"points_text");
+            }
+
+            GAME_STATE = 2;
+            break;
+         case 2: // Right
+
+            if(sphere.position.y <= -25){ //Pierdes una vida
+               STOP_GAME = true;
+               
+               if (GAME_STATE != FIRST_STATE) {
+                  
+                  LIFE_NUMBER += - 1;
+                  scene.remove(scene.getObjectByName( "lives_"+ String(LIFE_NUMBER))); 
+                  POINTS_COUNT += bonus * jugada_points;
+                  jugada_points = 0;
+                  deletePointsText(scene,"points_text");
+                  addPointsText(scene,String(POINTS_COUNT),-51,12,2,4,"points_text")
+                  deletePointsText(scene,"combo_text");
+                  FIRST_STATE = GAME_STATE;
+
+                  if (LIFE_NUMBER > 0){
+                     addMenuText(scene,"Pulsa cualquier boton para continuar");
+                     stepX = 0;
+                     stepY = 0;
+                     sphere.position.x = 0;
+                     sphere.position.y = -15;
+                     new Audio('life_lost.mp3').play();
+                     
+                     
+                     
+                  }else{
+                     stepX = 0;
+                     stepY = 0;
+                     GAME_STATE = 4;
+                  }      
+               
+               }
+               
+            }
+            break;
+         case 3: // GANAS --> COnfiguracion del siguiente nivel
+
+            if (GAME_STATE != FIRST_STATE) { 
+               FIRST_STATE = GAME_STATE;
+               STOP_GAME = true;
+               POINTS_COUNT += bonus * jugada_points;
+               jugada_points = 0;
+               deletePointsText(scene,"points_text")
+               addPointsText(scene,String(POINTS_COUNT),-51,12,2,4,"points_text")
+               deletePointsText(scene,"combo_text");
+               switch(LEVEL){
+
+                  case 2:
+                     USER_WIDTH = 15;//NO es codigo redundante, afecta a la colision de la barra con el border
+                     bricks = level_start(scene,bricks, 5,8,vel*1.3 ,USER_WIDTH);
+                     GAME_STATE = 0;
+                     new Audio('level_up.mp3').play();
+                     break;
+                  case 3:
+                     USER_WIDTH = 10; //NO es codigo redundante, afecta a la colision de la barra con el border
+                     bricks = level_start(scene,bricks, 8,10,vel*1.5 ,USER_WIDTH);
+                     GAME_STATE = 0;
+                     new Audio('level_up.mp3').play();
+                     break;
+
+                  case 4:
+                     
+                     FIRST_STATE = GAME_STATE;
+                     STOP_GAME = true;
+                     stepX = 0;
+                     stepY = 0;
+                     addMenuText(scene,"Felicidades, pulsa para reiniciar");
+                     var win_sound = new Audio('winner_war.mp3');
+                     win_sound.play();
+                   
+                     break;
+               }
+            }
+            break;
+         case 4: // Right
+            if (GAME_STATE != FIRST_STATE) {
+               FIRST_STATE = GAME_STATE;
+               STOP_GAME = true;
+               addMenuText(scene,"Has perdido, pulsa para reintentarlo");
+               var lost_sound = new Audio('imperial_april.mp3');
+               lost_sound.play();
+            }
+            break;
+      }     
+         
+      return bricks;
+   }
+
+   function checkCollision(sphere, bricks, scene) {
+      var originPosition = sphere.position.clone();
+
+      for (var i = 0; i < sphere.geometry.vertices.length; i++) {
+         var localVertex = sphere.geometry.vertices[i].clone();
+         var globalVertex = localVertex.applyMatrix4(sphere.matrix);
+         var directionVector = globalVertex.sub(sphere.position);
+         var ray = new THREE.Raycaster(originPosition, directionVector.clone().normalize());
+         var collisionResults = ray.intersectObjects(BORDERS);
+         
+         
+         if (collisionResults.length > 0 && collisionResults[0].distance < directionVector.length() && STOP_GAME == false ) {
+            // Collision detected --> var borders = [ leftBorder, rightBorder, topBorder, bar ];
+            border_sound.play();
+            if (collisionResults[0].object.name == "left" || collisionResults[0].object.name == "right") {
+               stepX *= -1;
+               y_last_change = sphere.position.y;
+            }
+            if ( collisionResults[0].object.name == "top") {
+               stepY *= -1;
+               y_last_change = sphere.position.y;
+            } 
+            if (collisionResults[0].object.name == "down") {
+              
+               var new_dir = physics_collision(BORDERS[3] , sphere , y_last_change)
+               stepY = new_dir[1] ; 
+               stepX = new_dir[0];
+               y_last_change = sphere.position.y;
+               POINTS_COUNT += bonus * jugada_points;
+               bonus_counter = 3;
+               bonus = 1;
+               jugada_points = 0;
+               deletePointsText(scene,"points_text");
+               deletePointsText(scene,"points_text"); //ESTA LINEA NO ES REDUNDANTE, EVITA UN BUG QUE SUCEDIA ALEATORIAMENTE
+               addPointsText(scene,String(POINTS_COUNT),-50,12,2,4,"points_text");
+               deletePointsText(scene,"combo_text");
+
+            } 
+            bar_last_pos = BORDERS[3].position;
+            break;
+         }
+
+         var collisionResults = ray.intersectObjects(bricks);
+         if (collisionResults.length > 0 && collisionResults[0].distance < directionVector.length() ) {
+            var new_bricks = [];
+            var new_bricks_puntuation = [];
+            
+            for (var i = 0; i < bricks.length ; i++) {
+               if (collisionResults[0].object.name == bricks[i].name && STOP_GAME == false) {
+                  var new_dir = physics_collision(bricks[i] , sphere, y_last_change)
+                  stepY = new_dir[1] ; 
+                  stepX = new_dir[0];
+                  y_last_change = sphere.position.y;
+                  scene.remove(bricks[i]);
+                  bonus_counter = bonus_counter +1;
+                  bonus = Math.floor( bonus_counter/3);
+
+                  
+                  jugada_points += bricks_puntuation[i];
+                  
+                  deletePointsText(scene,"combo_text");
+                  addPointsText(scene,String(jugada_points) + " x" +String(bonus),-48,0,2,2,"combo_text")
+                  brick_sound.pause();
+                  brick_sound.currentTime = 0;
+                  brick_sound.play();
+               }else{
+                  new_bricks.push(bricks[i]);
+                  new_bricks_puntuation.push(bricks_puntuation[i]);
+               }
+            }
+            bricks = new_bricks;
+            bricks_puntuation = new_bricks_puntuation;
+            if (bricks.length <= 0) { GAME_STATE = 3; LEVEL = LEVEL + 1;}
+            break;
+
+         }
+      }
+      
+      return bricks
+   }
+</script>
+</head>
+
+<body onload="init()">
+</body>
+
+</html>
+
